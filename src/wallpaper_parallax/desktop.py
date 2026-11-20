@@ -1,6 +1,6 @@
 """X11 wallpaper surfaces and the horizontal crop animation."""
 
-from math import ceil
+from math import ceil, cos, sin, tau
 import os
 
 from PIL import Image
@@ -10,7 +10,10 @@ from Xlib.ext import shape
 from .motion import Motion, SPRING_MARGIN
 from .xrender import Render
 
-RELATIVE_TRAVEL = {"background": 0.40, "middle": 0.75, "foreground": 1.0}
+RELATIVE_TRAVEL = {
+    "background": 0.40, "atmosphere": 0.55, "middle": 0.75,
+    "foreground": 1.0, "particles": 1.0,
+}
 
 
 def panorama(image, width, height, travel):
@@ -41,10 +44,14 @@ class View:
         self.margin = 0
         self.depth = 0
         self.last_offsets = None
+        self.ambient_since = now
+        self.ambient = None
+        self.drift = {}
+        self.visible = True
 
         self.window = desktop.root.create_window(
             *rect, 0, desktop.screen.root_depth, X.InputOutput, X.CopyFromParent,
-            override_redirect=True, event_mask=X.ExposureMask,
+            override_redirect=True, event_mask=X.ExposureMask | X.VisibilityChangeMask,
         )
         self.window.set_wm_name("Wallpaper Parallax")
         self.window.set_wm_class("wallpaper-parallax", "WallpaperParallax")
@@ -62,11 +69,15 @@ class View:
     def configure(self, source, target, now):
         layered = bool(source.depth and source.wallpaper.layers and self.desktop.render.supported)
         margin = ceil(self.travel * SPRING_MARGIN) if source.motion.spring else 0
+        ambient = source.wallpaper.ambient if layered and source.ambient else None
+        if ambient is not self.ambient:
+            self.ambient_since = now
         if source.wallpaper is not self.wallpaper or layered != self.use_layers or margin != self.margin:
             self.wallpaper = source.wallpaper
             self.use_layers = layered
             self.margin = margin
             self.load()
+        self.ambient = ambient
         self.depth = source.depth
         self.motion.retarget(target, now, source.motion)
 
@@ -81,9 +92,18 @@ class View:
         else:
             images = (("flat", self.wallpaper.preview),)
 
+        self.drift = {}
+        if self.use_layers and self.wallpaper.ambient is not None:
+            self.drift = {
+                name: (round(self.width * x / 100), round(self.height * y / 100), phase * tau)
+                for name, (x, y, phase) in self.wallpaper.ambient.layers.items()
+            }
+        pad_x = max((x for x, _, _ in self.drift.values()), default=0)
+        pad_y = max((y for _, y, _ in self.drift.values()), default=0)
+        self.padding = pad_x, pad_y
         for name, image in images:
-            strip = panorama(image, self.width, self.height, self.travel + 2 * self.margin)
-            alpha = name in ("middle", "foreground")
+            strip = panorama(image, self.width, self.height + 2 * pad_y, self.travel + 2 * (self.margin + pad_x))
+            alpha = name not in ("background", "flat")
             pixmap = root.create_pixmap(*strip.size, 32 if alpha else 24)
             picture = None
             if alpha:
@@ -98,23 +118,32 @@ class View:
         position, velocity = self.motion.sample(now)
         minimum = -self.margin / self.travel if self.travel else 0
         position_clamped = min(1 - minimum, max(minimum, position))
-        offsets = tuple(
-            round(self.margin + self.travel * (
+        pad_x, pad_y = self.padding
+        angle = tau * (now - self.ambient_since) / self.ambient.period if self.ambient else 0
+        offsets = []
+        for name, _, _ in self.surfaces:
+            x = self.margin + self.travel * (
                 0.5 + (position_clamped - 0.5) * (
                     1 - (1 - RELATIVE_TRAVEL.get(name, 1)) * self.depth / 100
                 )
-            ))
-            for name, _, _ in self.surfaces
-        )
+            )
+            if self.ambient and name in self.drift:
+                dx, dy, phase = self.drift[name]
+                x += dx * sin(angle + phase)
+                y = dy * cos(angle + phase)
+            else:
+                y = 0
+            offsets.append((pad_x + round(x), pad_y + round(y)))
         if offsets != self.last_offsets:
             target = self.buffer if self.use_layers else self.window
             _, background, _ = self.surfaces[0]
+            x, y = offsets[0]
             target.copy_area(
-                self.desktop.gc, background, offsets[0], 0, self.width, self.height, 0, 0,
+                self.desktop.gc, background, x, y, self.width, self.height, 0, 0,
             )
             if self.use_layers:
-                for (_, _, picture), x in zip(self.surfaces[1:], offsets[1:]):
-                    self.desktop.render.over(picture, self.buffer_picture, x, self.width, self.height)
+                for (_, _, picture), (x, y) in zip(self.surfaces[1:], offsets[1:]):
+                    self.desktop.render.over(picture, self.buffer_picture, x, y, self.width, self.height)
                 self.window.copy_area(
                     self.desktop.gc, self.buffer, 0, 0, self.width, self.height, 0, 0,
                 )
@@ -215,18 +244,29 @@ class Desktop:
 
     def paint(self, now):
         exposed = set()
+        visibility = {}
         while self.connection.pending_events():
             event = self.connection.next_event()
             if event.type == X.Expose:
                 exposed.add(event.window.id)
+            elif event.type == X.VisibilityNotify:
+                visibility[event.window.id] = event.state != X.VisibilityFullyObscured
 
         moving = False
         for view in self.views.values():
-            if view.window.id in exposed:
+            window = view.window.id
+            if window in visibility:
+                view.visible = visibility[window]
+            if window in exposed:
                 view.last_offsets = None
-            moving |= view.draw(now)
+            if view.visible:
+                moving |= view.draw(now)
         self.connection.flush()
         return moving
+
+    @property
+    def ambient(self):
+        return any(view.visible and view.ambient for view in self.views.values())
 
     def close(self):
         self.connection.close()

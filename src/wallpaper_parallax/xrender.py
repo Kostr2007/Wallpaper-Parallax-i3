@@ -40,7 +40,7 @@ class CompositeOver(rq.Request):
         rq.Card8("opcode"), rq.Opcode(8), rq.RequestLength(),
         rq.Set("operator", 1, (3,)), rq.Pad(3),  # PictOpOver
         rq.Card32("src"), rq.Card32("mask"), rq.Card32("dst"),
-        rq.Int16("src_x"), rq.Pad(10), rq.Card16("width"), rq.Card16("height"),
+        rq.Int16("src_x"), rq.Int16("src_y"), rq.Pad(8), rq.Card16("width"), rq.Card16("height"),
     )
 
 
@@ -79,10 +79,10 @@ class Render:
         FreePicture(display=self.display, opcode=self.opcode, picture=picture)
         self.display.free_resource_id(picture)
 
-    def over(self, src, dst, x, width, height):
+    def over(self, src, dst, x, y, width, height):
         CompositeOver(
             display=self.display, opcode=self.opcode, operator=3, src=src,
-            mask=X.NONE, dst=dst, src_x=x, width=width, height=height,
+            mask=X.NONE, dst=dst, src_x=x, src_y=y, width=width, height=height,
         )
 
     def upload_alpha(self, pixmap, image):

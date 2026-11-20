@@ -190,6 +190,44 @@ def smoke(stack, directory, log):
     wait_for(lambda: pixel(left) == (3, 2, 1), "depth disabled at runtime")
     assert views()[0].id == left.id
 
+    # Both motion axes work while i3 is idle, even when workspace motion is instant.
+    atmosphere = Image.new("RGBA", (768, 360))
+    paint = ImageDraw.Draw(atmosphere)
+    for y in range(0, 360, 8):
+        for x in range(0, 768, 8):
+            paint.rectangle((x, y, x + 7, y + 7), fill=(x // 4, y // 2, 255, 255))
+    atmosphere.save(companions / "atmosphere.png")
+    manifest = companions / "motion.json"
+    manifest.write_text(json.dumps({"version": 1, "period": 2, "layers": {"atmosphere": [5, 5, 0]}}))
+    set_state(scene, motion="instant", depth=100, ambient=False)
+    wait_for(lambda: pixel(left)[0] == 255, "atmosphere compositing")
+    still = digest(left)
+    set_state(scene, motion="instant", depth=100, ambient=True)
+    wait_for(lambda: digest(left) != still, "ambient motion while workspace is idle")
+    initial = pixel(left)
+    wait_for(lambda: pixel(left)[1] != initial[1], "vertical ambient motion")
+    wait_for(lambda: pixel(left)[2] != initial[2], "horizontal ambient motion")
+    cover = root.create_window(0, 0, 512, 360, 0, x11.screen().root_depth, X.InputOutput,
+                               X.CopyFromParent, override_redirect=True)
+    cover.map()
+    x11.sync()
+    time.sleep(0.14)
+    assert daemon.poll() is None
+    cover.destroy()
+    x11.sync()
+    wait_for(lambda: pixel(left)[0] == 255, "restore live layers after exposure")
+    set_state(scene, motion="instant", depth=100, ambient=False)
+    wait_for(lambda: digest(left) == still, "disable ambient motion without changing crop")
+    time.sleep(0.3)
+    assert digest(left) == still
+
+    manifest.write_text('{"version":1,"period":2,"layers":{"unknown":[5,5,0]}}')
+    set_state(scene, motion="instant", depth=100, ambient=True)
+    wait_for(lambda: digest(left) != still, "reload invalid manifest with static cropping")
+    invalid = digest(left)
+    time.sleep(0.3)
+    assert digest(left) == invalid
+
     # A view can overshoot even at the last workspace because the crop has room.
     spring_image = directory / "spring.png"
     row = bytes(channel for x in range(896) for channel in (x * 255 // 895, 0, 0))

@@ -34,6 +34,7 @@ let
           "--state-file"
           cfg.stateFile
         ]
+        ++ lib.optional (!cfg.ambient) "--no-ambient"
       )
     }
   '';
@@ -102,6 +103,12 @@ in
       type = lib.types.ints.between 0 100;
       default = 70;
       description = "Difference in travel between the backdrop and the foreground.";
+    };
+
+    ambient = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Allow continuous motion from live wallpaper packs.";
     };
 
     fps = lib.mkOption {

@@ -41,6 +41,7 @@ def parse_args():
     parser.add_argument("--motion", choices=MODES, default="smooth", help="workspace transition (default: smooth)")
     parser.add_argument("--inertia", type=bounded_int(0, 100), default=55, help="spring bounce and damping (default: 55)")
     parser.add_argument("--depth", type=bounded_int(0, 100), default=70, help="relative layer motion (default: 70)")
+    parser.add_argument("--no-ambient", action="store_true", help="disable continuous motion in live wallpaper packs")
     parser.add_argument("--socket", help="i3 IPC socket path")
     args = parser.parse_args()
     if args.workspace and len(set(args.workspace)) != len(args.workspace):
@@ -107,8 +108,8 @@ async def run_session(desktop, source, args, commands, events):
             source_changed = False
             now = loop.time()
             if now >= source_check:
-                previous = source.motion, source.depth
-                source_changed = source.refresh(warn) or previous != (source.motion, source.depth)
+                previous = source.motion, source.depth, source.ambient
+                source_changed = source.refresh(warn) or previous != (source.motion, source.depth, source.ambient)
                 source_check = now + 0.5
             if layout_changed or source_changed:
                 desktop.configure(layout, source, args.travel, loop.time())
@@ -118,6 +119,8 @@ async def run_session(desktop, source, args, commands, events):
             deadline = source_check
             if moving:
                 deadline = min(deadline, frame_time + 1 / args.fps)
+            elif desktop.ambient:
+                deadline = min(deadline, frame_time + 1 / min(args.fps, 24))
             try:
                 await asyncio.wait_for(wake.wait(), max(0, deadline - loop.time()))
             except TimeoutError:
@@ -142,7 +145,7 @@ async def run(args):
     task = asyncio.current_task()
     loop.add_signal_handler(signal.SIGTERM, task.cancel)
     motion = MotionSettings(args.motion, args.duration, args.inertia)
-    source = Source(args.image, args.state_file, motion, args.depth, warn)
+    source = Source(args.image, args.state_file, motion, args.depth, warn, ambient=not args.no_ambient)
     desktop = Desktop(warn)
     try:
         path = args.socket or desktop.socket_path()

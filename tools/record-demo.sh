@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (( $# != 2 )); then
-    echo "Usage: $0 IMAGE OUTPUT_DIRECTORY" >&2
+if (( $# < 2 || $# > 3 )) || [[ -n ${3:-} && $3 != --live ]]; then
+    echo "Usage: $0 IMAGE OUTPUT_DIRECTORY [--live]" >&2
     exit 2
+fi
+lead=0.85
+duration=5.8
+caption='Spring motion  ·  Layered wallpaper  ·  i3'
+if [[ ${3:-} == --live ]]; then
+    lead=2.2
+    duration=7.1
+    caption='Live wallpaper  ·  i3'
 fi
 wallpaper=$(realpath "$1")
 output=$(realpath -m "$2")
@@ -43,7 +51,7 @@ wait_until test -s "$work/display"
 DISPLAY=:"$(cat "$work/display")"
 export DISPLAY
 
-cat >"$work/i3.config" <<'CONFIG'
+cat >"$work/i3.config" <<CONFIG
 font pango:DejaVu Sans 10
 mouse_warping none
 bar {
@@ -51,7 +59,7 @@ bar {
     font pango:DejaVu Sans Bold 10
     height 34
     workspace_min_width 82
-    status_command echo 'Spring motion  ·  Layered wallpaper  ·  i3'; exec sleep infinity
+    status_command echo '$caption'; exec sleep infinity
     colors {
         background #101b29
         statusline #c6d9e1
@@ -74,10 +82,10 @@ wait_until wallpaper_ready
 sleep 0.35
 
 "$ffmpeg_bin" -hide_banner -loglevel error -y -f x11grab -draw_mouse 0 -framerate 30 \
-    -video_size 1280x720 -i "$DISPLAY" -t 5.8 -c:v ffv1 "$work/desktop.mkv" &
+    -video_size 1280x720 -i "$DISPLAY" -t "$duration" -c:v ffv1 "$work/desktop.mkv" &
 recording=$!
 pids+=("$recording")
-sleep 0.85
+sleep "$lead"
 for workspace in 2 4 3 5 1; do
     i3-msg -q "workspace number $workspace"
     sleep 0.85
@@ -86,7 +94,7 @@ wait "$recording"
 
 "$ffmpeg_bin" -hide_banner -loglevel error -y -i "$work/desktop.mkv" \
     -filter_complex_threads 1 \
-    -filter_complex 'fps=25,scale=720:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=96:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5' \
+    -filter_complex 'fps=16,scale=640:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=112:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5' \
     -loop 0 "$output/demo.gif"
 "$ffmpeg_bin" -hide_banner -loglevel error -y -ss 3.20 -i "$work/desktop.mkv" \
     -frames:v 1 -update 1 "$output/demo.png"
