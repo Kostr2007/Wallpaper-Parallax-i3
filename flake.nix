@@ -39,6 +39,7 @@
                 ];
               }
               ''
+                PYTHONPATH=${./src} python ${./tests/motion_test.py}
                 python ${./tests/x11_smoke.py}
                 touch "$out"
               '';

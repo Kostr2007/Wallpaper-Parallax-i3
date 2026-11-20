@@ -51,7 +51,7 @@ bar {
     font pango:DejaVu Sans Bold 10
     height 34
     workspace_min_width 82
-    status_command echo 'Wallpaper Parallax  ·  i3 / X11'; exec sleep infinity
+    status_command echo 'Spring motion  ·  Layered wallpaper  ·  i3'; exec sleep infinity
     colors {
         background #101b29
         statusline #c6d9e1
@@ -67,7 +67,7 @@ wait_until i3_ready
 
 picom --config /dev/null --backend xrender >"$work/picom.log" 2>&1 &
 pids+=("$!")
-"$app" --image "$wallpaper" --pages 5 --travel 60 --duration 480 >"$work/app.log" 2>&1 &
+"$app" --image "$wallpaper" --pages 5 --travel 36 --duration 450 --motion spring --inertia 100 --depth 90 >"$work/app.log" 2>&1 &
 pids+=("$!")
 wallpaper_ready() { xwininfo -name 'Wallpaper Parallax' >/dev/null 2>&1; }
 wait_until wallpaper_ready
@@ -78,9 +78,9 @@ sleep 0.35
 recording=$!
 pids+=("$recording")
 sleep 0.85
-for workspace in 2 3 4 5 3 1; do
+for workspace in 2 4 3 5 1; do
     i3-msg -q "workspace number $workspace"
-    sleep 0.72
+    sleep 0.85
 done
 wait "$recording"
 
@@ -88,5 +88,5 @@ wait "$recording"
     -filter_complex_threads 1 \
     -filter_complex 'fps=25,scale=720:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=96:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5' \
     -loop 0 "$output/demo.gif"
-"$ffmpeg_bin" -hide_banner -loglevel error -y -ss 2.85 -i "$work/desktop.mkv" \
+"$ffmpeg_bin" -hide_banner -loglevel error -y -ss 3.20 -i "$work/desktop.mkv" \
     -frames:v 1 -update 1 "$output/demo.png"

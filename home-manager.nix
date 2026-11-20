@@ -17,6 +17,12 @@ let
           (toString cfg.travel)
           "--duration"
           (toString cfg.duration)
+          "--motion"
+          cfg.motion
+          "--inertia"
+          (toString cfg.inertia)
+          "--depth"
+          (toString cfg.depth)
           "--fps"
           (toString cfg.fps)
         ]
@@ -74,6 +80,28 @@ in
       type = lib.types.ints.between 0 5000;
       default = 320;
       description = "Transition duration in milliseconds.";
+    };
+
+    motion = lib.mkOption {
+      type = lib.types.enum [
+        "smooth"
+        "spring"
+        "instant"
+      ];
+      default = "smooth";
+      description = "How the wallpaper moves between workspaces.";
+    };
+
+    inertia = lib.mkOption {
+      type = lib.types.ints.between 0 100;
+      default = 55;
+      description = "Spring bounce strength.";
+    };
+
+    depth = lib.mkOption {
+      type = lib.types.ints.between 0 100;
+      default = 70;
+      description = "Difference in travel between the backdrop and the foreground.";
     };
 
     fps = lib.mkOption {

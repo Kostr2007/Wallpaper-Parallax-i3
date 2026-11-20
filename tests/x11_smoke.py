@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import time
 
-from PIL import Image
+from PIL import Image, ImageDraw
 from Xlib import X, display
 
 
@@ -89,17 +89,21 @@ def smoke(stack, directory, log):
     Image.frombytes("RGB", (768, 360), data * 360).save(source)
     state = directory / "wallpaper.json"
 
-    def set_state(image, fit="fill"):
+    def set_state(image, fit="fill", **options):
         tmp = state.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"image": str(image), "fit": fit}))
+        tmp.write_text(json.dumps({"image": str(image), "fit": fit, **options}))
         tmp.replace(state)
 
     def views():
         surfaces = [
             w for w in root.query_tree().children
             if w.get_wm_class() == ("wallpaper-parallax", "WallpaperParallax")
+            and w.get_attributes().map_state == X.IsViewable
         ]
         return sorted(surfaces, key=lambda window: window.get_geometry().x)
+
+    def pixel(window, x=0, y=0):
+        return tuple(window.get_image(x, y, 1, 1, X.ZPixmap, 0xffffff).data[:3])
 
     def pixels(window):
         return window.get_image(0, 0, 16, 16, X.ZPixmap, 0xffffff).data
@@ -157,6 +161,46 @@ def smoke(stack, directory, log):
     wait_for(lambda: not views(), "static fit fallback")
     set_state(replacement)
     wait_for(lambda: len(views()) == 2, "return to animated fill")
+    # The three planes share the same canvas, with distinct travel and alpha.
+    left, right = views()
+    scene = directory / "layered.png"
+    Image.new("RGB", (768, 360), (1, 2, 3)).save(scene)
+    companions = scene.with_suffix(".parallax")
+    companions.mkdir()
+    Image.open(source).save(companions / "background.png")
+    middle = Image.new("RGBA", (768, 360))
+    ImageDraw.Draw(middle).rectangle((150, 10, 199, 19), fill=(0, 255, 0, 255))
+    middle.save(companions / "middle.png")
+    foreground = Image.new("RGBA", (768, 360))
+    ImageDraw.Draw(foreground).rectangle((400, 10, 419, 19), fill=(40, 120, 200, 128))
+    foreground.save(companions / "foreground.png")
+
+    i3("workspace number 1")
+    set_state(scene, motion="instant", depth=100)
+    wait_for(lambda: pixel(left) == (20, 0, 77), "far plane at the first workspace")
+    assert pixel(left, 125, 15) == (0, 255, 0)
+    assert pixel(left, 410, 15) == (110, 100, 135)
+    unaffected = digest(right)
+    i3("workspace number 5")
+    wait_for(lambda: pixel(left) == (20, 0, 179), "far plane at the last workspace")
+    assert pixel(left, 125, 15) == (20, 80, 48)
+    assert pixel(left, 154, 15) == (110, 100, 58)
+    assert digest(right) == unaffected
+    set_state(scene, motion="instant", depth=0)
+    wait_for(lambda: pixel(left) == (3, 2, 1), "depth disabled at runtime")
+    assert views()[0].id == left.id
+
+    # A view can overshoot even at the last workspace because the crop has room.
+    spring_image = directory / "spring.png"
+    row = bytes(channel for x in range(896) for channel in (x * 255 // 895, 0, 0))
+    Image.frombytes("RGB", (896, 360), row * 360).save(spring_image)
+    i3("workspace number 1")
+    set_state(spring_image, motion="spring", inertia=100)
+    wait_for(lambda: pixel(left) == (0, 0, 18), "spring starting crop")
+    i3("workspace number 5")
+    wait_for(lambda: pixel(left)[2] > 96, "spring overshoot beyond endpoint")
+    wait_for(lambda: pixel(left) == (0, 0, 91), "spring final crop")
+
     daemon.terminate()
     assert daemon.wait(timeout=5) == 0
     wait_for(lambda: not views(), "wallpaper surfaces to be removed")

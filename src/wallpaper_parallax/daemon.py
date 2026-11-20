@@ -6,15 +6,14 @@ from importlib.metadata import version
 import os
 from pathlib import Path
 import signal
-import subprocess
 import sys
 
-from PIL import Image
 from Xlib import error as xerror
 
 from . import ipc
 from .desktop import Desktop
-from .source import Source
+from .motion import MODES, MotionSettings
+from .source import IMAGE_ERRORS, Source
 
 
 def bounded_int(low, high):
@@ -39,6 +38,9 @@ def parse_args():
     parser.add_argument("--travel", type=bounded_int(0, 100), default=20, help="total travel as a %% of screen width (default: 20)")
     parser.add_argument("--duration", type=bounded_int(0, 5000), default=320, help="transition time in milliseconds (default: 320)")
     parser.add_argument("--fps", type=bounded_int(1, 144), default=60, help="frame rate limit (default: 60)")
+    parser.add_argument("--motion", choices=MODES, default="smooth", help="workspace transition (default: smooth)")
+    parser.add_argument("--inertia", type=bounded_int(0, 100), default=55, help="spring bounce and damping (default: 55)")
+    parser.add_argument("--depth", type=bounded_int(0, 100), default=70, help="relative layer motion (default: 70)")
     parser.add_argument("--socket", help="i3 IPC socket path")
     args = parser.parse_args()
     if args.workspace and len(set(args.workspace)) != len(args.workspace):
@@ -102,18 +104,19 @@ async def run_session(desktop, source, args, commands, events):
             if layout_changed:
                 layout_dirty = False
                 layout = await get_layout(*commands, args)
-            image_changed = False
+            source_changed = False
             now = loop.time()
             if now >= source_check:
-                image_changed = source.refresh(warn)
+                previous = source.motion, source.depth
+                source_changed = source.refresh(warn) or previous != (source.motion, source.depth)
                 source_check = now + 0.5
-            if layout_changed or image_changed:
-                desktop.configure(layout, source.image, image_changed, args, loop.time())
+            if layout_changed or source_changed:
+                desktop.configure(layout, source, args.travel, loop.time())
 
             frame_time = loop.time()
-            desktop.paint(frame_time, args.duration)
+            moving = desktop.paint(frame_time)
             deadline = source_check
-            if any(view.motion.moving(frame_time, args.duration) for view in desktop.views.values()):
+            if moving:
                 deadline = min(deadline, frame_time + 1 / args.fps)
             try:
                 await asyncio.wait_for(wake.wait(), max(0, deadline - loop.time()))
@@ -138,8 +141,9 @@ async def run(args):
     loop = asyncio.get_running_loop()
     task = asyncio.current_task()
     loop.add_signal_handler(signal.SIGTERM, task.cancel)
-    source = Source(args.image, args.state_file)
-    desktop = Desktop()
+    motion = MotionSettings(args.motion, args.duration, args.inertia)
+    source = Source(args.image, args.state_file, motion, args.depth, warn)
+    desktop = Desktop(warn)
     try:
         path = args.socket or desktop.socket_path()
         async with ipc.connect(path) as commands, ipc.connect(path) as events:
@@ -163,10 +167,7 @@ def main():
         return 0
     except asyncio.IncompleteReadError:
         warn("i3 IPC connection closed")
-    except (
-        OSError, ValueError, xerror.DisplayError, xerror.ConnectionClosedError,
-        subprocess.SubprocessError, Image.DecompressionBombError,
-    ) as exc:
+    except (*IMAGE_ERRORS, xerror.DisplayError, xerror.ConnectionClosedError) as exc:
         warn(str(exc))
     else:
         return 0

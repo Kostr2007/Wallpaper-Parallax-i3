@@ -1,17 +1,17 @@
 # Wallpaper Parallax for i3
 
-Обои плавно прокручиваются по горизонтали при смене рабочего стола i3, как домашний экран старого Android. Каждый рабочий стол показывает свой участок одной панорамы.
+Обои плавно прокручиваются по горизонтали при смене рабочего стола i3, как домашний экран старого Android. Пружина подхватывает текущую скорость при быстрой смене стола, а передний план может двигаться быстрее заднего.
 
 ![Переключение рабочих столов в i3 с параллаксом обоев](docs/demo.gif)
 
-[Скриншот в полном размере](docs/demo.png) · [Панорама из демонстрации](docs/panorama.jpg)
+[Скриншот рабочего стола](docs/demo.png) · [Настройки Material You](docs/settings.png) · [Многослойные обои из GIF](docs/midnight.parallax)
 
 ## Быстрый запуск
 
 В открытой сессии i3 на X11:
 
 ```sh
-nix run github:Kostr2007/Wallpaper-Parallax-i3/v0.1.0 -- --image "$HOME/Pictures/wallpaper.jpg"
+nix run github:Kostr2007/Wallpaper-Parallax-i3/v0.2.0 -- --image "$HOME/Pictures/wallpaper.jpg" --motion spring
 ```
 
 Или установите команду из исходников в виртуальное окружение:
@@ -35,27 +35,59 @@ exec --no-startup-id /path/to/wallpaper-parallax --image /path/to/wallpaper.jpg
 | --- | --- | --- |
 | `--pages` | 5 | Сколько столов с номерами 1…N распределено по ширине панорамы |
 | `--travel` | 20 | Полный ход камеры в процентах от ширины монитора |
-| `--duration` | 320 | Длительность перехода в миллисекундах. При `0` положение меняется сразу |
+| `--duration` | 320 | Длительность плавного перехода или темп пружины. При `0` положение меняется сразу |
+| `--motion` | `smooth` | Плавный `smooth`, пружинный `spring` или мгновенный `instant` переход |
+| `--inertia` | 55 | Сила отскока пружины от 0 до 100 |
+| `--depth` | 70 | Разница в движении слоёв от 0 до 100. При `0` используется плоское изображение |
 | `--fps` | 60 | Верхняя граница частоты кадров |
 | `--workspace NAME` | — | Имена столов по порядку, один флаг на имя. Используется вместо `--pages` |
 
-Например, десять рабочих столов с ходом 36% и переходом за 340 мс:
+Например, пружинный переход для десяти рабочих столов с ходом 36%:
 
 ```sh
-wallpaper-parallax --image "$HOME/Pictures/wallpaper.jpg" --pages 10 --travel 36 --duration 340
+wallpaper-parallax --image "$HOME/Pictures/wallpaper.jpg" --pages 10 --travel 36 --duration 340 --motion spring
 ```
 
 Столы с номерами выше `--pages` показывают правый край. Столы без номера показывают центр, если их порядок не задан через `--workspace`. Картинка масштабируется до размера экрана с запасом на прокрутку. Чем больше `--travel`, тем заметнее эффект и тем сильнее приближение у картинки с пропорциями экрана.
+
+### Обои с глубиной
+
+Рядом с плоской картинкой разместите одноимённую папку с суффиксом `.parallax`.
+
+```text
+midnight.png
+midnight.parallax/
+  background.png
+  middle.png
+  foreground.png
+```
+
+Все изображения используют один холст и имеют одинаковые размеры. Фон непрозрачный. Средний и передний планы поддерживают прозрачность PNG. Достаточно одного из этих двух планов. Плоский кадр используется для статичных обоев и для расчёта палитры Material You.
+
+Для просмотра примера клонируйте репозиторий и запустите:
+
+```sh
+nix run . -- --image docs/midnight.png --motion spring --travel 45
+```
+
+В интеграции с Material You параметры находятся в **Super+I → Обои и стиль → Параллакс обоев**. Выбор перехода, инерция и глубина применяются во время работы. Общий переключатель анимаций в разделе «Интерфейс» включает мгновенное смещение, когда анимации выключены.
 
 ### Подключение к менеджеру обоев
 
 Вместо `--image` передайте `--state-file /path/to/wallpaper.json`. Менеджер обоев может обновлять файл атомарной заменой:
 
 ```json
-{"image": "/home/alex/Pictures/wallpaper.jpg", "fit": "fill"}
+{
+  "image": "/home/alex/Pictures/wallpaper.jpg",
+  "fit": "fill",
+  "motion": "spring",
+  "inertia": 55,
+  "depth": 70,
+  "duration_scale": 1
+}
 ```
 
-`image` — абсолютный путь. `fit` по умолчанию равен `fill`. При значениях `center`, `max` и `tile` служба освобождает фон для основного менеджера обоев. Изменения файла подхватываются в течение примерно полусекунды.
+`image` — абсолютный путь. `fit` по умолчанию равен `fill`. При значениях `center`, `max` и `tile` служба освобождает фон для основного менеджера обоев. Дополнительные параметры переопределяют параметры запуска. `duration_scale` принимает значения от 0,5 до 2. Изменения файла подхватываются в течение примерно полусекунды.
 
 ### Home Manager
 
@@ -63,7 +95,7 @@ wallpaper-parallax --image "$HOME/Pictures/wallpaper.jpg" --pages 10 --travel 36
 
 ```nix
 wallpaper-parallax = {
-  url = "github:Kostr2007/Wallpaper-Parallax-i3/v0.1.0";
+  url = "github:Kostr2007/Wallpaper-Parallax-i3/v0.2.0";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
@@ -78,6 +110,9 @@ wallpaper-parallax = {
     image = "/home/alex/Pictures/wallpaper.jpg";
     pages = 5;
     travel = 20;
+    motion = "spring";
+    inertia = 55;
+    depth = 70;
   };
 }
 ```
@@ -87,10 +122,10 @@ wallpaper-parallax = {
 ## Совместимость и проверка
 
 - Требуется i3 на X11 с 24-битным TrueColor. Поддерживаются PNG, JPEG, WebP и другие форматы Pillow. Для JPEG XL используется `djxl` из libjxl, который включён в пакет Nix.
-- Изображение загружается в X11 при смене картинки или размера экрана. При переключении столов служба сдвигает область отрисовки в X-сервере. У каждого выхода своя позиция.
+- Изображение загружается в X11 при смене картинки или размера экрана. Сервер X11 сдвигает области отрисовки, а XRender смешивает слои с прозрачностью. У каждого выхода своя позиция.
 - Поддерживается picom. Служба рисует на прозрачном для ввода слое под окнами, поэтому после её остановки видны статичные обои X11.
-- `nix flake check` запускает i3 на Xvfb и проверяет промежуточные кадры, два монитора, быструю смену направления, замену обоев и остановку.
+- `nix flake check` запускает i3 на Xvfb и проверяет инерцию при смене цели, пружинный отскок, два монитора, смещение отдельных слоёв, прозрачность и замену обоев.
 
-Демонстрацию можно переснять командой `tools/record-demo.sh docs/panorama.jpg docs`. Нужны Xvfb, i3, picom, xwininfo, ffmpeg с `x11grab` и установленная команда `wallpaper-parallax`.
+Демонстрацию можно переснять командой `tools/record-demo.sh docs/midnight.png docs`. Нужны Xvfb, i3, picom, xwininfo, ffmpeg с `x11grab` и установленная команда `wallpaper-parallax`.
 
-[Android WallpaperService.Engine](https://developer.android.com/reference/android/service/wallpaper/WallpaperService.Engine) · [Протокол i3 IPC](https://i3wm.org/docs/ipc.html)
+[Android WallpaperService.Engine](https://developer.android.com/reference/android/service/wallpaper/WallpaperService.Engine) · [Пружины Material 3](https://github.com/material-components/material-components-android/blob/master/docs/theming/Motion.md) · [Протокол i3 IPC](https://i3wm.org/docs/ipc.html)
