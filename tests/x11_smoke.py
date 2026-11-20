@@ -285,6 +285,42 @@ def smoke(stack, directory, log):
     i3("workspace number 1")
     wait_for(lambda: aligned(327), "poster aligned at first workspace")
 
+    native = directory / "native.png"
+    Image.new("RGB", (768, 360)).save(native)
+    native_pack = native.with_suffix(".parallax")
+    native_pack.mkdir()
+    Image.new("RGB", (768, 360)).save(native_pack / "background.png")
+    stem = Image.new("RGBA", (768, 360))
+    ImageDraw.Draw(stem).rectangle((310, 0, 314, 359), fill=(234, 25, 11, 255))
+    stem.save(native_pack / "foreground.png")
+    clear = Image.new("RGBA", (768, 360))
+    clear.save(native_pack / "atmosphere.png")
+    Image.new("RGBA", (12, 6), (10, 70, 220, 90)).save(native_pack / "atmosphere.loop.png")
+    (native_pack / "motion.json").write_text(json.dumps({
+        "version": 2, "period": 2, "frames": 2,
+        "tracks": {"atmosphere": {"width": 4, "height": 4, "columns": 2, "parallax": "foreground"}},
+        "sway": {"foreground": {"amplitude": .12, "root": .82, "phase": 0, "light": "atmosphere"}},
+    }))
+
+    def stem_pixels(y):
+        data = left.get_image(0, y, 512, 1, X.ZPixmap, 0xffffff).data
+        return [x for x in range(512) if data[4 * x + 2] >= 145]
+
+    set_state(native, motion="instant", depth=100, ambient=False)
+    wait_for(lambda: len(stem_pixels(70)) == 5, "native stem resting at full detail")
+    still_top, still_bottom = stem_pixels(70), stem_pixels(344)
+    assert still_top == still_bottom
+    set_state(native, motion="instant", depth=100, ambient=True)
+    wait_for(lambda: (px := stem_pixels(70)) and abs(px[0] - still_top[0]) > 8, "native stem bending")
+    assert stem_pixels(344) == still_bottom
+    assert len(stem_pixels(70)) >= 4
+    assert pixel(left, still_bottom[2], 344)[0] > 60, "illumination on the object"
+    # The light track already paints the backdrop. Atop must not paint it twice outside the stem.
+    assert pixel(left, 5, 71) == (78, 25, 4)
+    set_state(native, motion="instant", depth=100, ambient=False)
+    wait_for(lambda: stem_pixels(70) == still_top and pixel(left, 5, 71) == (0, 0, 0),
+             "native geometry and light reset together")
+
     # A view can overshoot even at the last workspace because the crop has room.
     spring_image = directory / "spring.png"
     row = bytes(channel for x in range(896) for channel in (x * 255 // 895, 0, 0))

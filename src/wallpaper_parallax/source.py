@@ -27,11 +27,21 @@ class Filmstrip:
 
 
 @dataclass(frozen=True)
+class Sway:
+    amplitude: float
+    root: float
+    phase: float
+    parallax: str
+    light: str | None
+
+
+@dataclass(frozen=True)
 class Ambient:
     period: float
     layers: dict[str, tuple[float, float, float]] = field(default_factory=dict)
     frames: int = 0
     filmstrips: dict[str, Filmstrip] = field(default_factory=dict)
+    sway: dict[str, Sway] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -110,8 +120,9 @@ def load_filmstrips(directory, data, period, layers):
     if type(frames) is not int or not 2 <= frames <= 144 or frames / period > 24:
         raise ValueError("expected 2–144 frames at up to 24 fps")
     tracks = data.get("tracks")
-    if not isinstance(tracks, dict) or not tracks:
-        raise ValueError("expected at least one effects track")
+    sway_tracks = data.get("sway", {})
+    if not isinstance(tracks, dict) or not isinstance(sway_tracks, dict) or not (tracks or sway_tracks):
+        raise ValueError("expected at least one effects or sway track")
     names = {name for name, _ in layers if name != "background"}
     filmstrips = {}
     for name, track in tracks.items():
@@ -132,7 +143,22 @@ def load_filmstrips(directory, data, period, layers):
             if image.size != size or image.mode != "RGBA" or image.format != "PNG" or image.is_animated:
                 raise ValueError(f"{path.name} must be a single RGBA PNG with dimensions {size}")
         filmstrips[name] = Filmstrip(path, width, height, columns, size, parallax)
-    return Ambient(period, frames=frames, filmstrips=filmstrips)
+    sway = {}
+    for name, track in sway_tracks.items():
+        if name not in names or name in filmstrips or not isinstance(track, dict):
+            raise ValueError(f"expected a sway track for a native overlay, got {name!r}")
+        amplitude, root, phase = (track.get(key) for key in ("amplitude", "root", "phase"))
+        if (any(type(value) not in (int, float) for value in (amplitude, root, phase))
+                or not (0 < amplitude <= .15 and .60 <= root <= 1 and 0 <= phase <= 1)):
+            raise ValueError(f"invalid sway geometry for {name!r}")
+        parallax, light = track.get("parallax", name), track.get("light")
+        if parallax not in LAYER_NAMES:
+            raise ValueError(f"unknown parallax anchor for {name!r}")
+        if light is not None and (not isinstance(light, str) or light not in filmstrips
+                                  or filmstrips[light].parallax != parallax):
+            raise ValueError(f"light for {name!r} needs a filmstrip aligned with its parallax anchor")
+        sway[name] = Sway(amplitude, root, phase, parallax, light)
+    return Ambient(period, frames=frames, filmstrips=filmstrips, sway=sway)
 
 
 def load_wallpaper(path, layers, manifest, warn):

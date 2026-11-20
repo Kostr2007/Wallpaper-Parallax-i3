@@ -9,7 +9,7 @@ from Xlib.ext import shape
 
 from .motion import Motion, SPRING_MARGIN
 from .source import IMAGE_ERRORS
-from .xrender import Render
+from .xrender import ATOP, OVER, SRC, Render
 
 RELATIVE_TRAVEL = {
     "background": 0.40, "atmosphere": 0.55, "middle": 0.75,
@@ -37,6 +37,7 @@ class View:
         self.wallpaper = None
         self.surfaces = []
         self.buffer = self.buffer_picture = None
+        self.sway_buffer = self.sway_picture = None
         self.use_layers = False
         self.margin = 0
         self.depth = 0
@@ -91,13 +92,20 @@ class View:
 
         self.drift = {}
         self.anchor = {}
+        self.sway = {}
         if self.use_layers and self.wallpaper.ambient is not None:
             self.drift = {
                 name: (round(self.width * x / 100), round(self.height * y / 100), phase * tau)
                 for name, (x, y, phase) in self.wallpaper.ambient.layers.items()
             }
             self.anchor = {name: clip.parallax for name, clip in self.wallpaper.ambient.filmstrips.items()}
-        pad_x = max((x for x, _, _ in self.drift.values()), default=0)
+            self.sway = self.wallpaper.ambient.sway
+            self.anchor.update({name: effect.parallax for name, effect in self.sway.items()})
+        if any(effect.light is not None for effect in self.sway.values()):
+            self.sway_buffer = root.create_pixmap(self.width, self.height, 32)
+            self.sway_picture = render.picture(self.sway_buffer, 32)
+        sway_pad = ceil(max((effect.amplitude for effect in self.sway.values()), default=0) * self.height)
+        pad_x = max(sway_pad, max((x for x, _, _ in self.drift.values()), default=0))
         pad_y = max((y for _, y, _ in self.drift.values()), default=0)
         self.padding = pad_x, pad_y
         self.strip_size = self.width + self.travel + 2 * (self.margin + pad_x), self.height + 2 * pad_y
@@ -110,12 +118,14 @@ class View:
             if alpha:
                 render.upload_alpha(pixmap, strip)
                 picture = render.picture(pixmap, 32)
+                if name in self.sway:
+                    render.bilinear(picture)
             else:
                 pixmap.put_pil_image(self.desktop.gc, 0, 0, strip)
             self.surfaces.append((name, pixmap, picture))
         self.last_offsets = None
 
-    def draw_effect(self, texture, number, x, y):
+    def draw_effect(self, texture, number, x, y, target=None):
         clip, _, picture = texture
         row, column = divmod(number, clip.columns)
         left, top, right, bottom = self.crop
@@ -126,7 +136,40 @@ class View:
         ty = row * (clip.height + 2) + 1 + top * clip.height / height + y * scale_y
         render = self.desktop.render
         render.transform(picture, scale_x, scale_y, tx, ty)
-        render.over(picture, self.buffer_picture, 0, 0, self.width, self.height)
+        render.composite(picture, target or self.buffer_picture, 0, 0, self.width, self.height,
+                         operator=ATOP if target else OVER)
+
+    def draw_sway(self, picture, effect, angle, frame, x, y):
+        render = self.desktop.render
+        light = self.desktop.textures.get(effect.light) if frame is not None else None
+        target = self.sway_picture if light is not None else self.buffer_picture
+        operator = SRC if light is not None else OVER
+        _, top, _, bottom = self.crop
+        source_height = self.wallpaper.preview.height
+        scale = (bottom - top) / self.strip_size[1]
+        amplitude = effect.amplitude * source_height / scale
+
+        def displacement(row):
+            depth = (top + (y + row) * scale) / source_height
+            phase = 3.1 * depth + effect.phase * tau
+            envelope = max(0, (effect.root - depth) / effect.root) ** 1.6
+            return amplitude * envelope * (sin(angle + phase) - sin(phase)) / 2
+
+        step = max(1, ceil(self.height / 32))
+        previous = displacement(0)
+        for row in range(0, self.height, step):
+            height = min(step, self.height - row)
+            following = displacement(row + height)
+            # Interpolate both ends of the strip so neighboring strips meet.
+            render.transform(picture, 1, 1, x - previous, y + row,
+                             shear=(previous - following) / height)
+            render.composite(picture, target, 0, 0, self.width, height,
+                             operator=operator, dst_y=row)
+            previous = following
+        render.transform(picture, 1, 1, 0, 0)
+        if light is not None:
+            self.draw_effect(light, frame, x, y, target)
+            render.over(target, self.buffer_picture, 0, 0, self.width, self.height)
 
     def draw(self, now):
         position, velocity = self.motion.sample(now)
@@ -135,6 +178,10 @@ class View:
         pad_x, pad_y = self.padding
         angle = tau * (now - self.ambient_since) / self.ambient.period if self.ambient else 0
         frame = self.desktop.effect_frame(now) if self.use_layers else None
+        sway_angle = None
+        if self.ambient and self.sway:
+            elapsed = max(0, now - self.desktop.animation_start)
+            sway_angle = round(tau * (elapsed % self.ambient.period) / self.ambient.period, 4)
         offsets = []
         for name, _, _ in self.surfaces:
             plane = self.anchor.get(name, name)
@@ -150,7 +197,7 @@ class View:
             else:
                 y = 0
             offsets.append((pad_x + round(x), pad_y + round(y)))
-        if (offsets, frame) != self.last_offsets:
+        if (offsets, frame, sway_angle) != self.last_offsets:
             target = self.buffer if self.use_layers else self.window
             _, background, _ = self.surfaces[0]
             x, y = offsets[0]
@@ -160,14 +207,16 @@ class View:
             if self.use_layers:
                 for (name, _, picture), (x, y) in zip(self.surfaces[1:], offsets[1:]):
                     texture = self.desktop.textures.get(name) if frame is not None else None
-                    if texture is not None:
+                    if sway_angle is not None and name in self.sway:
+                        self.draw_sway(picture, self.sway[name], sway_angle, frame, x, y)
+                    elif texture is not None:
                         self.draw_effect(texture, frame, x, y)
                     else:
                         self.desktop.render.over(picture, self.buffer_picture, x, y, self.width, self.height)
                 self.window.copy_area(
                     self.desktop.gc, self.buffer, 0, 0, self.width, self.height, 0, 0,
                 )
-            self.last_offsets = offsets, frame
+            self.last_offsets = offsets, frame, sway_angle
         return position != self.motion.target or velocity != 0
 
     def free_surfaces(self):
@@ -180,6 +229,10 @@ class View:
             self.desktop.render.free(self.buffer_picture)
             self.buffer.free()
             self.buffer = self.buffer_picture = None
+        if self.sway_buffer is not None:
+            self.desktop.render.free(self.sway_picture)
+            self.sway_buffer.free()
+            self.sway_buffer = self.sway_picture = None
 
     def close(self):
         self.window.destroy()
@@ -257,7 +310,7 @@ class Desktop:
         animation = None
         if layout and source.depth and self.render.supported and source.ambient:
             ambient = source.wallpaper.ambient
-            if ambient and ambient.filmstrips:
+            if ambient and (ambient.filmstrips or ambient.sway):
                 animation = ambient
         if animation is not self.animation:
             self.load_effects(animation, now)
@@ -302,7 +355,7 @@ class Desktop:
         return None
 
     def ambient_deadline(self, now, max_fps):
-        if self.textures:
+        if self.textures and not self.animation.sway:
             rate = self.animation.frames / self.animation.period
             if rate <= max_fps:
                 next_frame = floor((now - self.animation_start) * rate) + 1
@@ -333,7 +386,8 @@ class Desktop:
 
     @property
     def ambient(self):
-        return any(view.visible and (self.textures or (view.ambient and view.drift)) for view in self.views.values())
+        return any(view.visible and (self.textures or (view.ambient and (view.drift or view.sway)))
+                   for view in self.views.values())
 
     def close(self):
         self.connection.close()

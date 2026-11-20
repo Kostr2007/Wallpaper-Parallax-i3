@@ -11,7 +11,7 @@
 В открытой сессии i3 на X11:
 
 ```sh
-nix run github:Kostr2007/Wallpaper-Parallax-i3/v0.4.1 -- --image "$HOME/Pictures/wallpaper.jpg" --motion spring
+nix run github:Kostr2007/Wallpaper-Parallax-i3/v0.5.0 -- --image "$HOME/Pictures/wallpaper.jpg" --motion spring
 ```
 
 Или установите команду из исходников в виртуальное окружение:
@@ -94,6 +94,22 @@ Wallpaper-MY экспортирует кадры эффектов в PNG с пр
 
 Поле `parallax` у дорожки задаёт имя плана, с которым она делит смещение камеры. Например, `"parallax": "surface"` на дорожке `atmosphere` удерживает свет над объектами на `surface` при переключении рабочих столов. Якорь применяется и к статичному кадру дорожки при выключенных эффектах.
 
+В версии 2 карты `tracks` и `sway` могут использоваться вместе. План из `sway` берётся из обычного PNG, а изгиб вычисляется при отрисовке в разрешении экрана.
+
+```json
+{
+  "version": 2,
+  "period": 9.5,
+  "frames": 142,
+  "tracks": {"atmosphere": {"width": 537, "height": 201, "columns": 7, "parallax": "surface"}},
+  "sway": {
+    "surface": {"amplitude": 0.114, "root": 0.98, "phase": 0, "parallax": "surface", "light": "atmosphere"}
+  }
+}
+```
+
+`amplitude` принимает значения больше нуля и до 0,15 от высоты холста. `root` — положение закреплённого основания от 0,6 до 1 по вертикали, `phase` — сдвиг на долю цикла от 0 до 1. `light` указывает на дорожку с кадрами освещения и тем же якорем `parallax`. Свет меняет цвет внутри прозрачного силуэта, сохраняя его края. Для `sway` достаточно исходного PNG, а при выключении анимации слой возвращается в исходное положение.
+
 Манифест версии 1 задаёт движение слоёв по горизонтали и вертикали.
 
 ```json
@@ -135,7 +151,7 @@ Wallpaper-MY экспортирует кадры эффектов в PNG с пр
 
 ```nix
 wallpaper-parallax = {
-  url = "github:Kostr2007/Wallpaper-Parallax-i3/v0.4.1";
+  url = "github:Kostr2007/Wallpaper-Parallax-i3/v0.5.0";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```

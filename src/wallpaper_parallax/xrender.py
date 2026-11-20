@@ -35,12 +35,16 @@ class FreePicture(rq.Request):
     )
 
 
-class CompositeOver(rq.Request):
+SRC, OVER, ATOP = 1, 3, 9
+
+
+class Composite(rq.Request):
     _request = rq.Struct(
         rq.Card8("opcode"), rq.Opcode(8), rq.RequestLength(),
-        rq.Set("operator", 1, (3,)), rq.Pad(3),  # PictOpOver
+        rq.Set("operator", 1, (SRC, OVER, ATOP)), rq.Pad(3),
         rq.Card32("src"), rq.Card32("mask"), rq.Card32("dst"),
-        rq.Int16("src_x"), rq.Int16("src_y"), rq.Pad(8), rq.Card16("width"), rq.Card16("height"),
+        rq.Int16("src_x"), rq.Int16("src_y"), rq.Pad(6), rq.Int16("dst_y"),
+        rq.Card16("width"), rq.Card16("height"),
     )
 
 
@@ -94,18 +98,21 @@ class Render:
         self.display.free_resource_id(picture)
 
     def over(self, src, dst, x, y, width, height):
-        CompositeOver(
-            display=self.display, opcode=self.opcode, operator=3, src=src,
-            mask=X.NONE, dst=dst, src_x=x, src_y=y, width=width, height=height,
+        self.composite(src, dst, x, y, width, height)
+
+    def composite(self, src, dst, x, y, width, height, *, operator=OVER, dst_y=0):
+        Composite(
+            display=self.display, opcode=self.opcode, operator=operator, src=src,
+            mask=X.NONE, dst=dst, src_x=x, src_y=y, dst_y=dst_y, width=width, height=height,
         )
 
     def bilinear(self, picture):
         SetBilinearFilter(display=self.display, opcode=self.opcode, picture=picture, name="bilinear")
 
-    def transform(self, picture, sx, sy, x, y):
+    def transform(self, picture, sx, sy, x, y, shear=0):
         SetPictureTransform(
             display=self.display, opcode=self.opcode, picture=picture,
-            xx=round(sx * 65536), xy=0, dx=round(x * 65536),
+            xx=round(sx * 65536), xy=round(shear * 65536), dx=round(x * 65536),
             yx=0, yy=round(sy * 65536), dy=round(y * 65536), zx=0, zy=0, zz=65536,
         )
 
