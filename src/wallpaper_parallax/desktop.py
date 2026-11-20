@@ -90,11 +90,13 @@ class View:
             images = (("flat", self.wallpaper.preview),)
 
         self.drift = {}
+        self.anchor = {}
         if self.use_layers and self.wallpaper.ambient is not None:
             self.drift = {
                 name: (round(self.width * x / 100), round(self.height * y / 100), phase * tau)
                 for name, (x, y, phase) in self.wallpaper.ambient.layers.items()
             }
+            self.anchor = {name: clip.parallax for name, clip in self.wallpaper.ambient.filmstrips.items()}
         pad_x = max((x for x, _, _ in self.drift.values()), default=0)
         pad_y = max((y for _, y, _ in self.drift.values()), default=0)
         self.padding = pad_x, pad_y
@@ -135,9 +137,10 @@ class View:
         frame = self.desktop.effect_frame(now) if self.use_layers else None
         offsets = []
         for name, _, _ in self.surfaces:
+            plane = self.anchor.get(name, name)
             x = self.margin + self.travel * (
                 0.5 + (position_clamped - 0.5) * (
-                    1 - (1 - RELATIVE_TRAVEL.get(name, 1)) * self.depth / 100
+                    1 - (1 - RELATIVE_TRAVEL.get(plane, 1)) * self.depth / 100
                 )
             )
             if self.ambient and name in self.drift:

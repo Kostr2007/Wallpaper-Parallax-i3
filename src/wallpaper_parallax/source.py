@@ -23,6 +23,7 @@ class Filmstrip:
     height: int
     columns: int
     size: tuple[int, int]
+    parallax: str
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,9 @@ def load_filmstrips(directory, data, period, layers):
         if name not in names or not isinstance(track, dict):
             raise ValueError(f"expected an effects track for an existing overlay, got {name!r}")
         width, height, columns = (track.get(key) for key in ("width", "height", "columns"))
+        parallax = track.get("parallax", name)
+        if parallax not in LAYER_NAMES:
+            raise ValueError(f"unknown parallax anchor for {name!r}")
         if (any(type(value) is not int for value in (width, height, columns))
                 or not (1 <= width <= 1024 and 1 <= height <= 1024 and 1 <= columns <= frames)):
             raise ValueError(f"invalid frame geometry for {name!r}")
@@ -127,7 +131,7 @@ def load_filmstrips(directory, data, period, layers):
         with Image.open(path) as image:
             if image.size != size or image.mode != "RGBA" or image.format != "PNG" or image.is_animated:
                 raise ValueError(f"{path.name} must be a single RGBA PNG with dimensions {size}")
-        filmstrips[name] = Filmstrip(path, width, height, columns, size)
+        filmstrips[name] = Filmstrip(path, width, height, columns, size, parallax)
     return Ambient(period, frames=frames, filmstrips=filmstrips)
 
 

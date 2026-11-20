@@ -254,6 +254,37 @@ def smoke(stack, directory, log):
     atlas_path.unlink()
     wait_for(lambda: pixel(left, 125, 50) == (96, 48, 32), "missing filmstrip uses poster")
 
+    # A linked illumination and its receiver must travel together at both
+    # edges of the panorama, including when the effects are frozen.
+    upper = Image.new("RGBA", (768, 360))
+    ImageDraw.Draw(upper).rectangle((308, 60, 347, 86), fill=(214, 96, 35, 255))
+    upper.save(companions / "atmosphere.png")
+    lower = Image.new("RGBA", upper.size)
+    ImageDraw.Draw(lower).rectangle((308, 100, 347, 126), fill=(22, 180, 77, 255))
+    lower.save(companions / "foreground.png")
+    tile = upper.resize((384, 180), Image.Resampling.BOX)
+    atlas = Image.new("RGBA", (772, 182))
+    atlas.paste(tile, (1, 1))
+    atlas.paste(tile, (387, 1))
+    atlas.save(atlas_path)
+    manifest.write_text(json.dumps({
+        "version": 2, "period": 2, "frames": 2,
+        "tracks": {"atmosphere": {"width": 384, "height": 180, "columns": 2, "parallax": "foreground"}},
+    }))
+
+    def aligned(x):
+        return pixel(left, x, 71) == (35, 96, 214) and pixel(left, x, 112) == (77, 180, 22)
+
+    i3("workspace number 1")
+    set_state(scene, motion="instant", depth=100, ambient=True)
+    wait_for(lambda: aligned(327), "filmstrip aligned at first workspace")
+    i3("workspace number 5")
+    wait_for(lambda: aligned(71), "filmstrip aligned at last workspace")
+    set_state(scene, motion="instant", depth=100, ambient=False)
+    wait_for(lambda: aligned(71), "poster aligned at last workspace")
+    i3("workspace number 1")
+    wait_for(lambda: aligned(327), "poster aligned at first workspace")
+
     # A view can overshoot even at the last workspace because the crop has room.
     spring_image = directory / "spring.png"
     row = bytes(channel for x in range(896) for channel in (x * 255 // 895, 0, 0))
