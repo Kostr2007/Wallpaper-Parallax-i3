@@ -44,6 +44,20 @@ class CompositeOver(rq.Request):
     )
 
 
+class SetPictureTransform(rq.Request):
+    _request = rq.Struct(
+        rq.Card8("opcode"), rq.Opcode(28), rq.RequestLength(), rq.Card32("picture"),
+        *(rq.Int32(key) for key in ("xx", "xy", "dx", "yx", "yy", "dy", "zx", "zy", "zz")),
+    )
+
+
+class SetBilinearFilter(rq.Request):
+    _request = rq.Struct(
+        rq.Card8("opcode"), rq.Opcode(30), rq.RequestLength(), rq.Card32("picture"),
+        rq.LengthOf("name", 2), rq.Pad(2), rq.String8("name"),
+    )
+
+
 class Render:
     def __init__(self, connection):
         self.display = connection.display
@@ -85,18 +99,32 @@ class Render:
             mask=X.NONE, dst=dst, src_x=x, src_y=y, width=width, height=height,
         )
 
+    def bilinear(self, picture):
+        SetBilinearFilter(display=self.display, opcode=self.opcode, picture=picture, name="bilinear")
+
+    def transform(self, picture, sx, sy, x, y):
+        SetPictureTransform(
+            display=self.display, opcode=self.opcode, picture=picture,
+            xx=round(sx * 65536), xy=0, dx=round(x * 65536),
+            yx=0, yy=round(sy * 65536), dy=round(y * 65536), zx=0, zy=0, zz=65536,
+        )
+
     def upload_alpha(self, pixmap, image):
         # XRender consumes premultiplied BGRA bytes on the supported X11 visual.
-        r, g, b, a = image.convert("RGBa").split()
-        pixels = Image.merge("RGBA", (b, g, r, a)).tobytes()
         width, height = image.size
         stride = width * 4
         rows = (self.display.info.max_request_length * 4 - 24) // stride
         gc = pixmap.create_gc(graphics_exposures=False)
         try:
-            for y in range(0, height, rows):
+            for index, y in enumerate(range(0, height, rows), 1):
                 count = min(rows, height - y)
-                chunk = pixels[y * stride:(y + count) * stride]
+                rgba = image.crop((0, y, width, y + count)).convert("RGBa")
+                r, g, b, a = rgba.split()
+                chunk = Image.merge("RGBA", (b, g, r, a)).tobytes()
                 pixmap.put_image(gc, 0, y, width, count, X.ZPixmap, 32, 0, chunk)
+                # Python Xlib concatenates queued request buffers when it flushes.
+                if index % 8 == 0:
+                    self.display.flush()
         finally:
             gc.free()
+        self.display.flush()

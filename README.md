@@ -11,7 +11,7 @@
 В открытой сессии i3 на X11:
 
 ```sh
-nix run github:Kostr2007/Wallpaper-Parallax-i3/v0.3.0 -- --image "$HOME/Pictures/wallpaper.jpg" --motion spring
+nix run github:Kostr2007/Wallpaper-Parallax-i3/v0.4.0 -- --image "$HOME/Pictures/wallpaper.jpg" --motion spring
 ```
 
 Или установите команду из исходников в виртуальное окружение:
@@ -75,9 +75,24 @@ nix run . -- --image docs/midnight.png --motion spring --travel 45
 
 ### Живые сцены
 
-Каждая сцена содержит плоский PNG и папку `.parallax` рядом с ним. Файлы `background.png`, `atmosphere.png`, `middle.png`, `foreground.png` и `particles.png` перечислены от дальнего плана к ближнему. Нужен фон и хотя бы один прозрачный слой. Набор можно создать в [Wallpaper-MY](https://github.com/Kostr2007/Wallpaper-MY).
+Каждая сцена содержит плоский PNG и папку `.parallax` рядом с ним. Файлы `background.png`, `atmosphere.png`, `middle.png`, `surface.png`, `foreground.png` и `particles.png` перечислены от дальнего плана к ближнему. Нужен фон и хотя бы один прозрачный слой. Набор можно создать в [Wallpaper-MY](https://github.com/Kostr2007/Wallpaper-MY).
 
-Файл `motion.json` в этой папке задаёт циклическое движение.
+Wallpaper-MY 0.2 экспортирует кадры эффектов в PNG с прозрачностью. Манифест `motion.json` задаёт длину цикла, количество кадров и параметры дорожек.
+
+```json
+{
+  "version": 2,
+  "period": 7.5,
+  "frames": 120,
+  "tracks": {
+    "atmosphere": {"width": 536, "height": 201, "columns": 7}
+  }
+}
+```
+
+Каждая дорожка использует одноимённый файл, здесь `atmosphere.loop.png`. Кадры записаны слева направо и сверху вниз. Вокруг каждого кадра есть граница в один пиксель, повторяющая края кадра для билинейного масштабирования. Полная ширина PNG равна `columns × (width + 2)`, высота равна `ceil(frames / columns) × (height + 2)`. Допустимо 2–144 кадра при частоте до 24 кадров в секунду. При выключении эффектов используется обычный `atmosphere.png`.
+
+Манифест версии 1 задаёт движение слоёв по горизонтали и вертикали.
 
 ```json
 {
@@ -118,7 +133,7 @@ nix run . -- --image docs/midnight.png --motion spring --travel 45
 
 ```nix
 wallpaper-parallax = {
-  url = "github:Kostr2007/Wallpaper-Parallax-i3/v0.3.0";
+  url = "github:Kostr2007/Wallpaper-Parallax-i3/v0.4.0";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
@@ -147,8 +162,8 @@ wallpaper-parallax = {
 - Требуется i3 на X11 с 24-битным TrueColor. Поддерживаются PNG, JPEG, WebP и другие форматы Pillow. Для JPEG XL используется `djxl` из libjxl, который включён в пакет Nix.
 - Изображение загружается в X11 при смене картинки или размера экрана. Сервер X11 сдвигает области отрисовки, а XRender смешивает слои с прозрачностью. У каждого выхода своя позиция.
 - Поддерживается picom. Служба рисует на прозрачном для ввода слое под окнами, поэтому после её остановки видны статичные обои X11.
-- `nix flake check` запускает i3 на Xvfb и проверяет инерцию при смене цели, пружинный отскок, два монитора, смещение слоёв, прозрачность, замену обоев и включение живой сцены во время работы.
+- `nix flake check` запускает i3 на Xvfb и проверяет пружину, два монитора, прозрачность, движение старых сцен, смену кадров новых эффектов на неподвижном столе и статичный кадр при отключении.
 
-Демонстрацию можно переснять командой `tools/record-demo.sh docs/midnight.png docs`. Для живой сцены добавьте `--live`, чтобы первые две секунды показать один рабочий стол. Нужны Xvfb, i3, picom, xwininfo, ffmpeg с `x11grab` и установленная команда `wallpaper-parallax`.
+Демонстрацию можно переснять командой `tools/record-demo.sh docs/midnight.png docs`. Для живой сцены добавьте `--live`, чтобы первые четыре секунды показать один рабочий стол. Нужны Xvfb, i3, picom, xwininfo, ffmpeg с `x11grab` и установленная команда `wallpaper-parallax`.
 
 [Android WallpaperService.Engine](https://developer.android.com/reference/android/service/wallpaper/WallpaperService.Engine) · [Пружины Material 3](https://github.com/material-components/material-components-android/blob/master/docs/theming/Motion.md) · [Протокол i3 IPC](https://i3wm.org/docs/ipc.html)

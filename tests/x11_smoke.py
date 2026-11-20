@@ -228,6 +228,32 @@ def smoke(stack, directory, log):
     time.sleep(0.3)
     assert digest(left) == invalid
 
+    # A v2 track replaces pixels at a fixed camera position. Its frame grid
+    # has both rows and columns, and the same texture serves both outputs.
+    Image.new("RGBA", (768, 360), (32, 48, 96, 255)).save(companions / "atmosphere.png")
+    atlas = Image.new("RGBA", (12, 12))
+    atlas_colors = ((231, 40, 60), (20, 202, 95), (40, 70, 214), (218, 178, 24))
+    for index, color in enumerate(atlas_colors):
+        x, y = (index % 2) * 6, (index // 2) * 6
+        atlas.paste((*color, 255), (x, y, x + 6, y + 6))
+    atlas_path = companions / "atmosphere.loop.png"
+    atlas.save(atlas_path)
+    manifest.write_text(json.dumps({
+        "version": 2, "period": 2, "frames": 4,
+        "tracks": {"atmosphere": {"width": 4, "height": 4, "columns": 2}},
+    }))
+    for color in atlas_colors:
+        expected = color[::-1]
+        wait_for(lambda: pixel(left, 125, 50) == expected, "filmstrip frame")
+        assert pixel(left, 510, 355) in tuple(color[::-1] for color in atlas_colors)
+    assert pixel(right, 125, 50) in tuple(color[::-1] for color in atlas_colors)
+    set_state(scene, motion="instant", depth=100, ambient=False)
+    wait_for(lambda: pixel(left, 125, 50) == (96, 48, 32), "filmstrip freeze fallback")
+    set_state(scene, motion="instant", depth=100, ambient=True)
+    wait_for(lambda: pixel(left, 125, 50) != (96, 48, 32), "filmstrip resumed")
+    atlas_path.unlink()
+    wait_for(lambda: pixel(left, 125, 50) == (96, 48, 32), "missing filmstrip uses poster")
+
     # A view can overshoot even at the last workspace because the crop has room.
     spring_image = directory / "spring.png"
     row = bytes(channel for x in range(896) for channel in (x * 255 // 895, 0, 0))

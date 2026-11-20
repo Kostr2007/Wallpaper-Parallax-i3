@@ -120,7 +120,7 @@ async def run_session(desktop, source, args, commands, events):
             if moving:
                 deadline = min(deadline, frame_time + 1 / args.fps)
             elif desktop.ambient:
-                deadline = min(deadline, frame_time + 1 / min(args.fps, 24))
+                deadline = min(deadline, desktop.ambient_deadline(frame_time, min(args.fps, 24)))
             try:
                 await asyncio.wait_for(wake.wait(), max(0, deadline - loop.time()))
             except TimeoutError:

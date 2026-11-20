@@ -1,7 +1,8 @@
 """Load an image or a layered wallpaper and follow the desktop state file."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
+from math import ceil
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,14 +12,25 @@ from PIL import Image, ImageOps
 
 from .motion import MODES, MotionSettings
 
-LAYER_NAMES = ("background", "atmosphere", "middle", "foreground", "particles")
+LAYER_NAMES = ("background", "atmosphere", "middle", "surface", "foreground", "particles")
 IMAGE_ERRORS = (OSError, ValueError, subprocess.SubprocessError, Image.DecompressionBombError)
+
+
+@dataclass(frozen=True)
+class Filmstrip:
+    path: Path
+    width: int
+    height: int
+    columns: int
+    size: tuple[int, int]
 
 
 @dataclass(frozen=True)
 class Ambient:
     period: float
-    layers: dict[str, tuple[float, float, float]]
+    layers: dict[str, tuple[float, float, float]] = field(default_factory=dict)
+    frames: int = 0
+    filmstrips: dict[str, Filmstrip] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -70,11 +82,13 @@ def layer_files(path):
 
 def load_ambient(manifest, layers):
     data = json.loads(manifest.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1:
-        raise ValueError("expected motion manifest version 1")
+    if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] not in (1, 2):
+        raise ValueError("expected motion manifest version 1 or 2")
     period = data.get("period")
     if type(period) not in (int, float) or not 2 <= period <= 120:
         raise ValueError("period must be between 2 and 120 seconds")
+    if data["version"] == 2:
+        return load_filmstrips(manifest.parent, data, period, layers)
     planes = data.get("layers")
     if not isinstance(planes, dict) or not planes:
         raise ValueError("expected at least one moving layer")
@@ -88,6 +102,33 @@ def load_ambient(manifest, layers):
         if not (0 <= x <= 5 and 0 <= y <= 5 and 0 <= phase <= 1):
             raise ValueError("x and y must be in 0–5 percent, phase in 0–1")
     return Ambient(period, {name: tuple(values) for name, values in planes.items()})
+
+
+def load_filmstrips(directory, data, period, layers):
+    frames = data.get("frames")
+    if type(frames) is not int or not 2 <= frames <= 144 or frames / period > 24:
+        raise ValueError("expected 2–144 frames at up to 24 fps")
+    tracks = data.get("tracks")
+    if not isinstance(tracks, dict) or not tracks:
+        raise ValueError("expected at least one effects track")
+    names = {name for name, _ in layers if name != "background"}
+    filmstrips = {}
+    for name, track in tracks.items():
+        if name not in names or not isinstance(track, dict):
+            raise ValueError(f"expected an effects track for an existing overlay, got {name!r}")
+        width, height, columns = (track.get(key) for key in ("width", "height", "columns"))
+        if (any(type(value) is not int for value in (width, height, columns))
+                or not (1 <= width <= 1024 and 1 <= height <= 1024 and 1 <= columns <= frames)):
+            raise ValueError(f"invalid frame geometry for {name!r}")
+        size = (width + 2) * columns, (height + 2) * ceil(frames / columns)
+        if max(size) > 8192 or size[0] * size[1] > 20_000_000:
+            raise ValueError(f"filmstrip for {name!r} is too large")
+        path = directory / f"{name}.loop.png"
+        with Image.open(path) as image:
+            if image.size != size or image.mode != "RGBA" or image.format != "PNG" or image.is_animated:
+                raise ValueError(f"{path.name} must be a single RGBA PNG with dimensions {size}")
+        filmstrips[name] = Filmstrip(path, width, height, columns, size)
+    return Ambient(period, frames=frames, filmstrips=filmstrips)
 
 
 def load_wallpaper(path, layers, manifest, warn):
@@ -106,7 +147,7 @@ def load_wallpaper(path, layers, manifest, warn):
     if manifest is not None:
         try:
             ambient = load_ambient(manifest, images)
-        except (OSError, ValueError) as exc:
+        except IMAGE_ERRORS as exc:
             warn(f"{manifest}: {exc}")
     return Wallpaper(preview, images, ambient)
 
@@ -181,7 +222,9 @@ class Source:
         signature = tuple((name, file, file_identity(file)) for name, file in layer_files(path))
         manifest = path.with_suffix(".parallax") / "motion.json" if path is not None else None
         manifest_identity = file_identity(manifest)
-        identity = path, file_identity(path), signature, manifest_identity
+        filmstrips = tuple(file_identity(manifest.with_name(f"{name}.loop.png"))
+                           for name in LAYER_NAMES[1:]) if manifest_identity else ()
+        identity = path, file_identity(path), signature, manifest_identity, filmstrips
         if identity == self.image_identity:
             return False
 

@@ -1,6 +1,6 @@
 """X11 wallpaper surfaces and the horizontal crop animation."""
 
-from math import ceil, cos, sin, tau
+from math import ceil, cos, floor, sin, tau
 import os
 
 from PIL import Image
@@ -8,26 +8,23 @@ from Xlib import X, Xatom, display
 from Xlib.ext import shape
 
 from .motion import Motion, SPRING_MARGIN
+from .source import IMAGE_ERRORS
 from .xrender import Render
 
 RELATIVE_TRAVEL = {
     "background": 0.40, "atmosphere": 0.55, "middle": 0.75,
-    "foreground": 1.0, "particles": 1.0,
+    "surface": 0.75, "foreground": 1.0, "particles": 1.0,
 }
 
 
-def panorama(image, width, height, travel):
-    """Scale to cover the screen plus the motion range, with a centered crop."""
-    width += travel
-    scale = max(width / image.width, height / image.height)
-    crop_width = min(image.width, width / scale)
-    crop_height = min(image.height, height / scale)
-    left = (image.width - crop_width) / 2
-    top = (image.height - crop_height) / 2
-    return image.resize(
-        (width, height), Image.Resampling.LANCZOS,
-        (left, top, image.width - left, image.height - top),
-    )
+def crop_box(source_size, target_size):
+    """Crop to cover the screen and its motion margins."""
+    width, height = source_size
+    target_width, target_height = target_size
+    scale = max(target_width / width, target_height / height)
+    left = max(0, (width - target_width / scale) / 2)
+    top = max(0, (height - target_height / scale) / 2)
+    return left, top, width - left, height - top
 
 
 class View:
@@ -101,8 +98,10 @@ class View:
         pad_x = max((x for x, _, _ in self.drift.values()), default=0)
         pad_y = max((y for _, y, _ in self.drift.values()), default=0)
         self.padding = pad_x, pad_y
+        self.strip_size = self.width + self.travel + 2 * (self.margin + pad_x), self.height + 2 * pad_y
+        self.crop = crop_box(self.wallpaper.preview.size, self.strip_size)
         for name, image in images:
-            strip = panorama(image, self.width, self.height + 2 * pad_y, self.travel + 2 * (self.margin + pad_x))
+            strip = image.resize(self.strip_size, Image.Resampling.LANCZOS, self.crop)
             alpha = name not in ("background", "flat")
             pixmap = root.create_pixmap(*strip.size, 32 if alpha else 24)
             picture = None
@@ -114,12 +113,26 @@ class View:
             self.surfaces.append((name, pixmap, picture))
         self.last_offsets = None
 
+    def draw_effect(self, texture, number, x, y):
+        clip, _, picture = texture
+        row, column = divmod(number, clip.columns)
+        left, top, right, bottom = self.crop
+        width, height = self.wallpaper.preview.size
+        scale_x = (right - left) * clip.width / (self.strip_size[0] * width)
+        scale_y = (bottom - top) * clip.height / (self.strip_size[1] * height)
+        tx = column * (clip.width + 2) + 1 + left * clip.width / width + x * scale_x
+        ty = row * (clip.height + 2) + 1 + top * clip.height / height + y * scale_y
+        render = self.desktop.render
+        render.transform(picture, scale_x, scale_y, tx, ty)
+        render.over(picture, self.buffer_picture, 0, 0, self.width, self.height)
+
     def draw(self, now):
         position, velocity = self.motion.sample(now)
         minimum = -self.margin / self.travel if self.travel else 0
         position_clamped = min(1 - minimum, max(minimum, position))
         pad_x, pad_y = self.padding
         angle = tau * (now - self.ambient_since) / self.ambient.period if self.ambient else 0
+        frame = self.desktop.effect_frame(now) if self.use_layers else None
         offsets = []
         for name, _, _ in self.surfaces:
             x = self.margin + self.travel * (
@@ -134,7 +147,7 @@ class View:
             else:
                 y = 0
             offsets.append((pad_x + round(x), pad_y + round(y)))
-        if offsets != self.last_offsets:
+        if (offsets, frame) != self.last_offsets:
             target = self.buffer if self.use_layers else self.window
             _, background, _ = self.surfaces[0]
             x, y = offsets[0]
@@ -142,12 +155,16 @@ class View:
                 self.desktop.gc, background, x, y, self.width, self.height, 0, 0,
             )
             if self.use_layers:
-                for (_, _, picture), (x, y) in zip(self.surfaces[1:], offsets[1:]):
-                    self.desktop.render.over(picture, self.buffer_picture, x, y, self.width, self.height)
+                for (name, _, picture), (x, y) in zip(self.surfaces[1:], offsets[1:]):
+                    texture = self.desktop.textures.get(name) if frame is not None else None
+                    if texture is not None:
+                        self.draw_effect(texture, frame, x, y)
+                    else:
+                        self.desktop.render.over(picture, self.buffer_picture, x, y, self.width, self.height)
                 self.window.copy_area(
                     self.desktop.gc, self.buffer, 0, 0, self.width, self.height, 0, 0,
                 )
-            self.last_offsets = offsets
+            self.last_offsets = offsets, frame
         return position != self.motion.target or velocity != 0
 
     def free_surfaces(self):
@@ -173,6 +190,9 @@ class Desktop:
             self.screen = self.connection.screen()
             self.root = self.screen.root
             self.views = {}
+            self.textures = {}
+            self.animation = None
+            self.animation_start = 0
             self.warn = warn
             self.warned_render = False
             self.check_display()
@@ -231,6 +251,13 @@ class Desktop:
         elif source.depth and source.wallpaper.layers and not self.render.supported and not self.warned_render:
             self.warn("layered wallpaper needs XRender with 24-bit RGB and 32-bit ARGB formats")
             self.warned_render = True
+        animation = None
+        if layout and source.depth and self.render.supported and source.ambient:
+            ambient = source.wallpaper.ambient
+            if ambient and ambient.filmstrips:
+                animation = ambient
+        if animation is not self.animation:
+            self.load_effects(animation, now)
         for name, view in list(self.views.items()):
             if name not in layout or view.rect != layout[name][0]:
                 view.close()
@@ -241,6 +268,43 @@ class Desktop:
                 self.views[name].configure(source, target, now)
             else:
                 self.views[name] = View(self, rect, target, source, travel, now)
+
+    def load_effects(self, animation, now):
+        for _, pixmap, picture in self.textures.values():
+            self.render.free(picture)
+            pixmap.free()
+        self.textures.clear()
+        self.animation = animation
+        self.animation_start = now
+        if animation is None:
+            return
+        for name, clip in animation.filmstrips.items():
+            try:
+                with Image.open(clip.path) as image:
+                    image.load()
+                    if image.size != clip.size or image.mode != "RGBA":
+                        raise ValueError("filmstrip geometry changed during loading")
+                    pixmap = self.root.create_pixmap(*clip.size, 32)
+                    self.render.upload_alpha(pixmap, image)
+                picture = self.render.picture(pixmap, 32)
+                self.render.bilinear(picture)
+                self.textures[name] = clip, pixmap, picture
+            except IMAGE_ERRORS as exc:
+                self.warn(f"{clip.path}: {exc}")
+
+    def effect_frame(self, now):
+        if self.textures:
+            rate = self.animation.frames / self.animation.period
+            return floor((now - self.animation_start) * rate) % self.animation.frames
+        return None
+
+    def ambient_deadline(self, now, max_fps):
+        if self.textures:
+            rate = self.animation.frames / self.animation.period
+            if rate <= max_fps:
+                next_frame = floor((now - self.animation_start) * rate) + 1
+                return max(now + .001, self.animation_start + next_frame / rate)
+        return now + 1 / max_fps
 
     def paint(self, now):
         exposed = set()
@@ -266,7 +330,7 @@ class Desktop:
 
     @property
     def ambient(self):
-        return any(view.visible and view.ambient for view in self.views.values())
+        return any(view.visible and (self.textures or (view.ambient and view.drift)) for view in self.views.values())
 
     def close(self):
         self.connection.close()

@@ -9,8 +9,8 @@ lead=0.85
 duration=5.8
 caption='Spring motion  ·  Layered wallpaper  ·  i3'
 if [[ ${3:-} == --live ]]; then
-    lead=2.2
-    duration=7.1
+    lead=4.25
+    duration=9.1
     caption='Live wallpaper  ·  i3'
 fi
 wallpaper=$(realpath "$1")
@@ -30,7 +30,7 @@ cleanup() {
 trap cleanup EXIT
 
 wait_until() {
-    for ((attempt=0; attempt<100; attempt++)); do
+    for ((attempt=0; attempt<300; attempt++)); do
         if "$@"; then
             return
         fi
